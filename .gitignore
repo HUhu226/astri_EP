@@ -1,0 +1,10 @@
+# 忽略 benchmarks 文件夹的所有内容
+benchmarks/
+
+# 忽略 workspace 文件夹中的模型内容
+# workspace/**/*.pth
+# workspace/**/*.pkl
+workspace/
+Miniconda3-py38_23.5.2-0-Linux-x86_64.sh
+*.pth
+*.pkl
