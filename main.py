@@ -10,6 +10,7 @@ import treelib
 from tensorboardX import SummaryWriter
 import random
 from src import Agent, Environment, ReplayBuffer
+import matplotlib.pyplot as plt
 
 class SolutionPool:
     def __init__(self, pool_size: int, alpha: float) -> None:
@@ -129,6 +130,10 @@ class Trainer:
         num_macros_to_place, solution_pool_size, alpha, update_frontiers_begin, update_frontiers_freq,
         model_dir, solution_dir
     ):
+        self.visualize_steps = [4, 8, 16, 32]  # 指定需要可视化的步骤
+        self.step_positions = {step: [] for step in self.visualize_steps}  # 存储各步骤的位置数据
+        self.env_grid = None
+        self.visualize_freq = 100
 
         self.num_loops = num_loops
         self.num_episodes_in_loop = num_episodes_in_loop
@@ -153,18 +158,20 @@ class Trainer:
     def setup_tb_writer(self, tb_writer: SummaryWriter):
         self.tb_writer = tb_writer
 
-    def train(self, agent: Agent, env: Environment):
+    def train(self, agent: Agent, env: Environment, save_dir="results"):
 
         logging.info(f"==================== Training ====================")
+        self.env_grid = env.grid  # 在train方法中保存env.grid
 
         global_episode = 0
+
         for loop in range(self.num_loops):
             logging.info(
                 f"-------------------- Loop {loop} --------------------")
             replay_buffer = ReplayBuffer(self.buffer_capacity, env.grid)
             for episode in range(self.num_episodes_in_loop):
                 hpwl, sol_id, solution, placement = self.run_episode(
-                    env, agent, replay_buffer, global_episode)
+                    env, agent, replay_buffer, global_episode, save_dir)
 
                 logging.info(f"Episode {global_episode}, HPWL = {hpwl}")
                 self.solution_pool.update_sol(
@@ -186,6 +193,10 @@ class Trainer:
 
             if global_episode >= self.update_frontiers_begin and loop % self.update_frontiers_freq == 0:
                 self.solution_pool.update_frontiers()
+            
+            if global_episode % self.visualize_freq == 0:
+                print(f"[INFO] Generating visualization at episode {global_episode}")
+                self.visualize_step_positions(save_dir)
 
             placement, sol, hpwl = self.solution_pool.best_solution
 
@@ -199,7 +210,10 @@ class Trainer:
             with open(os.path.join(self.solution_dir, f"best_placement_{hpwl}.pkl"), 'wb') as f:
                 pickle.dump(placement, f)
 
-    def run_episode(self, env: Environment, agent: Agent, replay_buffer: ReplayBuffer, global_episode: int):
+                
+        self.visualize_step_positions(save_dir)
+
+    def run_episode(self, env: Environment, agent: Agent, replay_buffer: ReplayBuffer, global_episode: int, save_dir: str):
         # initialize the environment
         t, hpwl, score = 0, 0, 0
         solution, placement = [], []
@@ -216,10 +230,17 @@ class Trainer:
             else:
                 a, a_logp = agent.select_action(s, t)
 
-            s_, r, done, info = env.step(a)
+            s_, r, done, info = env.step(a, save_dir=save_dir, step=t, epoch=global_episode)
             placement.append(a)
             hpwl += info["delta_hpwl"]
 
+            # 新增：记录指定步骤的位置（x, y）
+            if t in self.visualize_steps:
+                grid = env.grid
+                pos_x = a // grid  # 计算x坐标（action是网格索引）
+                pos_y = a % grid   # 计算y坐标
+                self.step_positions[t].append((global_episode, pos_x, pos_y))  # 保存（epoch, x, y）
+            
             if not done:
                 if t >= len(sol):
                     replay_buffer.store(s, t, a, a_logp, r, s_, t + 1, 0.0)
@@ -245,8 +266,55 @@ class Trainer:
                 break
                 
             s = s_
+            
 
         return hpwl * env.ratio / 1e5, sol_id, solution, placement
+        
+    def visualize_step_positions(self, save_dir):
+        """为每个step生成一张图，包含所有episode的位置"""
+        os.makedirs(f"{save_dir}/placement_visualization", exist_ok=True)
+        
+        for step in self.visualize_steps:
+            positions = self.step_positions[step]
+            if not positions:
+                print(f"[WARNING] No positions recorded for step {step}")
+                continue
+            
+            episodes, xs, ys = zip(*positions)
+            
+            plt.figure(figsize=(12, 10))
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.xlim(0, self.env_grid)
+            plt.ylim(0, self.env_grid)
+            
+            # 使用颜色映射表示episode顺序（越新的episode颜色越深）
+            colors = plt.cm.viridis(np.linspace(0, 1, max(episodes) + 1))
+            
+            # 为每个episode绘制位置点
+            for ep, x, y in positions:
+                plt.scatter(x, y, s=100, color=colors[ep], alpha=0.7, 
+                            edgecolors='w', linewidths=1,
+                            label=f'Episode {ep}' if ep % 50 == 0 else "")  # 每50个episode显示一次图例
+            
+            plt.title(f'Step {step} Placement Positions Across {len(positions)} Episodes')
+            plt.xlabel('Grid X')
+            plt.ylabel('Grid Y')
+            
+            # 添加颜色条表示episode
+            sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=plt.Normalize(vmin=0, vmax=max(episodes)))
+            sm.set_array([])
+            cbar = plt.colorbar(sm, label='Episode')
+            cbar.set_label('Episode')
+            
+            # 限制图例数量，避免过多
+            handles, labels = plt.gca().get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            plt.legend(by_label.values(), by_label.keys(), loc='upper right', ncol=2, fontsize=8)
+            
+            # 保存图像（文件名包含当前最大episode数，方便查看随时间的变化）
+            filename = f"step_{step}_all_episodes_up_to_{max(episodes)}.png"
+            plt.savefig(f"{save_dir}/placement_visualization/{filename}", dpi=300, bbox_inches='tight')
+            plt.close()
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="main")
@@ -286,7 +354,7 @@ def main(config: DictConfig):
     trainer.setup_tb_writer(tb_writer)
 
     # train the model
-    trainer.train(agent, env)
+    trainer.train(agent, env, save_dir=config.env.save_dir)
 
 if __name__ == '__main__':
     main()

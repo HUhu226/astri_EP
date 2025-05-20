@@ -2,6 +2,10 @@ import torch
 import logging
 import math
 from src.place_db import PlaceDB
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+
 
 class Environment:
     def __init__(self,
@@ -12,6 +16,7 @@ class Environment:
         reward_scale,
         num_macros_to_place,
         grid,
+        save_dir=None,  # 新增：保存可视化结果的目录
     ):
 
         placedb = PlaceDB(benchmark, benchmark_dir, rank_mode)
@@ -38,6 +43,11 @@ class Environment:
         self.wire_mask_scale = wire_mask_scale
         self.reward_scale = reward_scale
 
+    ## 新增：可视化配置
+        self.save_dir = save_dir
+        self.visualize_steps = [4, 8, 16, 32]  # 默认可视化这些步骤
+
+
     def reset(self):
         self.t = 0
         self.macro_pos = {}
@@ -57,7 +67,7 @@ class Environment:
 
         return self.state
 
-    def step(self, action):
+    def step(self, action, save_dir=None, step=None, epoch=None):
         canvas, wire_mask, position_mask = self.state[0], self.state[1], self.state[2]
 
         pos_x = round(action // self.grid)
@@ -114,7 +124,7 @@ class Environment:
             next_y = math.ceil(max(
                 1, self.placedb.node_info[self.placedb.node_id_to_name[self.t]]['y']/self.ratio))
             position_mask = self.calc_position_mask(canvas, next_x, next_y)
-            wire_mask = self.calc_wiremask()
+            wire_mask = self.calc_wiremask(save_dir, step, epoch)
         else:
             next_x = 0
             next_y = 0
@@ -150,7 +160,8 @@ class Environment:
         mask[:, self.grid - next_y + 1:] = 1
         return mask
 
-    def calc_wiremask(self):
+    def calc_wiremask(self, save_dir = None, step = None, epoch = None):
+        """计算 wire mask 并保存图像"""
         wire_mask = torch.zeros((self.grid, self.grid))
         node_name = self.placedb.node_id_to_name[self.t]
 
@@ -177,7 +188,24 @@ class Environment:
 
                 wire_mask += wire_mask_x + wire_mask_y
 
+        # 保存 wire mask 图像
+        if save_dir and step is not None and epoch is not None:
+            if step in self.visualize_steps:
+                self.save_wire_mask(wire_mask, save_dir, step, epoch)
+    
         return wire_mask / self.wire_mask_scale
 
     def is_done(self):
         return self.t >= self.num_macros or self.t >= self.num_macros_to_place
+
+    def save_wire_mask(self, wire_mask, save_dir, step, epoch):
+        """保存 wire mask 为图像"""
+        os.makedirs(f"{save_dir}/wire_masks", exist_ok=True)
+        
+        plt.figure(figsize=(8, 8))
+        plt.imshow(wire_mask.numpy(), cmap='hot', interpolation='nearest')
+        plt.title(f'Epoch {epoch}, Step {step}: Wire Mask')
+        plt.colorbar(label='Wire Length Impact')
+        plt.grid(True, which='both', color='gray', linestyle='-', alpha=0.3)
+        plt.savefig(f"{save_dir}/wire_masks/epoch_{epoch}_step_{step}.png", dpi=300, bbox_inches='tight')
+        plt.close()
