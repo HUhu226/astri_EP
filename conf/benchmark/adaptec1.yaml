@@ -19,6 +19,7 @@ env:
   num_macros_to_place: 128
   grid: ${grid}
   rank_mode: 1
+  # 新增保存可视化路径
   save_dir: ${hydra:runtime.output_dir}/visualizations
 
 

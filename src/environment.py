@@ -45,10 +45,14 @@ class Environment:
 
     ## 新增：可视化配置
         self.save_dir = save_dir
-        self.visualize_steps = [4, 8, 16, 32]  # 默认可视化这些步骤
-
+        #self.visualize_steps = [4, 8, 16, 32]  # 默认可视化这些步骤
+        self.visualize_steps = list(range(0, self.num_macros_to_place))  # 可视化所有步骤
 
     def reset(self):
+    ##重置方法初始化环境状态，包括空白画布、线长掩码和位置掩码，形成三维张量作为智能体的观测。
+        # canvas: 画布
+        # wire_mask: 线长掩码
+        # position_mask: 位置掩码
         self.t = 0
         self.macro_pos = {}
         self.net_bound_info = {}
@@ -66,7 +70,7 @@ class Environment:
         ], dim=0)
 
         return self.state
-
+    
     def step(self, action, save_dir=None, step=None, epoch=None):
         canvas, wire_mask, position_mask = self.state[0], self.state[1], self.state[2]
 
@@ -164,6 +168,7 @@ class Environment:
         """计算 wire mask 并保存图像"""
         wire_mask = torch.zeros((self.grid, self.grid))
         node_name = self.placedb.node_id_to_name[self.t]
+        #print(f"node_name: {node_name}")
 
         for net_name in self.placedb.node_to_net_dict[node_name]:
             if net_name in self.net_bound_info:
@@ -191,21 +196,20 @@ class Environment:
         # 保存 wire mask 图像
         if save_dir and step is not None and epoch is not None:
             if step in self.visualize_steps:
-                self.save_wire_mask(wire_mask, save_dir, step, epoch)
+                self.save_wire_mask_data(wire_mask / self.wire_mask_scale, save_dir, step, epoch)
     
         return wire_mask / self.wire_mask_scale
 
     def is_done(self):
         return self.t >= self.num_macros or self.t >= self.num_macros_to_place
 
-    def save_wire_mask(self, wire_mask, save_dir, step, epoch):
-        """保存 wire mask 为图像"""
-        os.makedirs(f"{save_dir}/wire_masks", exist_ok=True)
+    def save_wire_mask_data(self, wire_mask, save_dir, step, epoch):
+        """保存 wire mask 数据为文件（.npy 格式），不直接生成图像"""
+        os.makedirs(f"{save_dir}/wire_mask_data", exist_ok=True)  # 创建数据保存目录
         
-        plt.figure(figsize=(8, 8))
-        plt.imshow(wire_mask.numpy(), cmap='hot', interpolation='nearest')
-        plt.title(f'Epoch {epoch}, Step {step}: Wire Mask')
-        plt.colorbar(label='Wire Length Impact')
-        plt.grid(True, which='both', color='gray', linestyle='-', alpha=0.3)
-        plt.savefig(f"{save_dir}/wire_masks/epoch_{epoch}_step_{step}.png", dpi=300, bbox_inches='tight')
-        plt.close()
+        # 保存为 NumPy 数组文件（.npy）
+        np.save(
+            f"{save_dir}/wire_mask_data/epoch_{epoch}_step_{step}.npy",
+            wire_mask.numpy()  # 转换为 NumPy 数组
+        )
+        
